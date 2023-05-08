@@ -83,16 +83,19 @@ RUN curl -sS -o /usr/local/bin/aws-iam-authenticator https://s3.us-west-2.amazon
     && curl -sS -L https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz | tar xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/kubectl /usr/local/bin/aws-iam-authenticator /usr/local/bin/ecs-cli /usr/local/bin/eksctl
 
+ARG TARGETARCH
+
 # Configure SSM
 RUN set -ex \
     && mkdir /tmp/ssm \
     && cd /tmp/ssm \
-    && wget -q https://s3.amazonaws.com/amazon-ssm-us-east-1/latest/debian_amd64/amazon-ssm-agent.deb \
+    && wget -q https://s3.amazonaws.com/amazon-ssm-us-east-1/latest/debian_$TARGETARCH/amazon-ssm-agent.deb \
     && dpkg -i amazon-ssm-agent.deb
 
 # Install AWS CLI v2
 # https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html
-RUN curl https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip \
+RUN AWSCLI_ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "aarch64") \
+    && curl https://awscli.amazonaws.com/awscli-exe-linux-$AWSCLI_ARCH.zip -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /opt \
     && /opt/aws/install --update -i /usr/local/aws-cli -b /usr/local/bin \
     && rm /tmp/awscliv2.zip \
@@ -164,10 +167,14 @@ RUN set -ex \
 # Install Powershell Core
 # See instructions at https://docs.microsoft.com/en-us/powershell/scripting/setup/installing-powershell-core-on-linux
 ARG POWERSHELL_VERSION=7.3.3
-ARG POWERSHELL_DOWNLOAD_URL=https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-x64.tar.gz
-ARG POWERSHELL_DOWNLOAD_SHA=478320F62C9BEC5765414B82B4086310777BF95AB2FC2310B2DB6CBC253B40B4
+ARG POWERSHELL_X64_DOWNLOAD_URL=https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-x64.tar.gz
+ARG POWERSHELL_ARM64_DOWNLOAD_URL=https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-arm64.tar.gz
+ARG POWERSHELL_X64_DOWNLOAD_SHA=478320F62C9BEC5765414B82B4086310777BF95AB2FC2310B2DB6CBC253B40B4
+ARG POWERSHELL_ARM64_DOWNLOAD_SHA=5EFCA750F22BFECB31BCDA57C3A76BB804C68AEF6626F123AAC68C6E3D7E52F7
 
 RUN set -ex \
+    && POWERSHELL_DOWNLOAD_URL=$([ "$TARGETARCH" = "amd64" ] && echo $POWERSHELL_X64_DOWNLOAD_URL || echo $POWERSHELL_ARM64_DOWNLOAD_URL) \
+    && POWERSHELL_DOWNLOAD_SHA=$([ "$TARGETARCH" = "amd64" ] && echo $POWERSHELL_X64_DOWNLOAD_SHA || echo $POWERSHELL_ARM64_DOWNLOAD_SHA) \
     && curl -SL $POWERSHELL_DOWNLOAD_URL --output powershell.tar.gz \
     && echo "$POWERSHELL_DOWNLOAD_SHA powershell.tar.gz" | sha256sum -c - \
     && mkdir -p /opt/microsoft/powershell/$POWERSHELL_VERSION \
@@ -269,7 +276,7 @@ RUN set -ex \
     && apt-get install -y -qq --no-install-recommends ca-certificates-java \
     # Ensure Java cacerts symlink points to valid location
     && update-ca-certificates -f \
-    && dpkg --add-architecture i386 \
+    && dpkg --add-architecture $([ "$TARGETARCH" = "amd64" ] && echo "i386" || echo "armhf") \
     && apt-get update \
     && for tool_path in $JAVA_HOME/bin/*; do \
           tool=`basename $tool_path`; \
@@ -329,12 +336,15 @@ ARG DIND_COMMIT="3b5fac462d21ca164b3778647420016315289034"
 ARG DOCKER_COMPOSE_VERSION="2.17.2"
 ARG SRC_DIR="/usr/src"
 
-ARG DOCKER_SHA256="ec8a71e79125d3ca76f7cc295f35eea225f4450e0ffe0775f103e2952ff580f6"
+ARG DOCKER_X86_64_SHA256="ec8a71e79125d3ca76f7cc295f35eea225f4450e0ffe0775f103e2952ff580f6"
+ARG DOCKER_AARCH64_SHA256="3865f837dbd951b19eeb5f7d87aada2e865b2017e9462fe389f0e5d9a438324d"
 ARG DOCKER_VERSION="23.0.1"
 
 # Install Docker
 RUN set -ex \
-    && curl -fSL "https://${DOCKER_BUCKET}/linux/static/${DOCKER_CHANNEL}/x86_64/docker-${DOCKER_VERSION}.tgz" -o docker.tgz \
+    && DOCKER_SHA256=$([ "$TARGETARCH" = "amd64" ] && echo $DOCKER_X86_64_SHA256 || echo $DOCKER_AARCH64_SHA256) \
+    && DOCKER_ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "aarch64") \
+    && curl -fSL "https://${DOCKER_BUCKET}/linux/static/${DOCKER_CHANNEL}/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" -o docker.tgz \
     && echo "${DOCKER_SHA256} *docker.tgz" | sha256sum -c - \
     && tar --extract --file docker.tgz --strip-components 1  --directory /usr/local/bin/ \
     && rm docker.tgz \
@@ -345,7 +355,7 @@ RUN set -ex \
     && echo 'dockremap:165536:65536' >> /etc/subuid \
     && echo 'dockremap:165536:65536' >> /etc/subgid \
     && wget -q "https://raw.githubusercontent.com/docker/docker/${DIND_COMMIT}/hack/dind" -O /usr/local/bin/dind \
-    && curl -L https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-Linux-x86_64 > /usr/local/bin/docker-compose \
+    && curl -L https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-Linux-${DOCKER_ARCH} > /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/dind /usr/local/bin/docker-compose \
     # Ensure docker-compose works
     && docker-compose version
